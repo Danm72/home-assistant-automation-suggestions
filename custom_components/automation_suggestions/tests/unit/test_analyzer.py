@@ -15,7 +15,8 @@ Covers:
 8. Malformed logbook entries handling
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -23,6 +24,7 @@ import pytest
 from custom_components.automation_suggestions.analyzer import (
     StaleAutomation,
     Suggestion,
+    analyze_patterns,
     extract_action_from_entry,
     find_automation_candidates,
     find_stale_automations,
@@ -1339,6 +1341,64 @@ class TestGetTimeWindow:
         dt = datetime(2025, 1, 20, 14, 45, 0)
         result = get_time_window(dt, window_minutes=60)
         assert result == "14:00"
+
+    def test_uses_home_assistant_local_timezone_pst(self, la_timezone):
+        """A UTC logbook timestamp must be bucketed in HA's local timezone."""
+        # 06:16 UTC in November is 22:16 the previous day in PST (UTC-8).
+        assert get_time_window(datetime(2026, 11, 17, 6, 16, tzinfo=UTC)) == "22:00"
+
+    def test_uses_home_assistant_local_timezone_pdt(self, la_timezone):
+        """The same UTC hour maps to a different local hour during DST."""
+        # 06:16 UTC in July is 23:16 the previous day in PDT (UTC-7).
+        assert get_time_window(datetime(2026, 7, 1, 6, 16, tzinfo=UTC)) == "23:00"
+
+    def test_utc_timezone_is_unchanged(self, utc_timezone):
+        """Users whose local timezone is UTC must see the original UTC hour."""
+        assert get_time_window(datetime(2026, 11, 17, 6, 16, tzinfo=UTC)) == "06:00"
+
+    def test_naive_datetime_is_left_unchanged(self):
+        """Naive datetimes have no timezone to convert and stay as-is."""
+        assert get_time_window(datetime(2025, 1, 20, 14, 45)) == "14:30"
+
+
+@pytest.fixture
+def utc_timezone():
+    """Explicitly set HA's default timezone to UTC and restore it afterwards."""
+    from homeassistant.util import dt as dt_util
+
+    original = dt_util.DEFAULT_TIME_ZONE
+    dt_util.set_default_time_zone(UTC)
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+@pytest.fixture
+def la_timezone():
+    """Set HA's default timezone to Pacific and restore it after the test."""
+    from homeassistant.util import dt as dt_util
+
+    original = dt_util.DEFAULT_TIME_ZONE
+    dt_util.set_default_time_zone(ZoneInfo("America/Los_Angeles"))
+    yield
+    dt_util.set_default_time_zone(original)
+
+
+class TestAnalyzePatternsLocalTime:
+    """Pattern hours must be reported in local time, not UTC."""
+
+    def test_hours_are_local(self, la_timezone):
+        timestamps = [
+            datetime(2026, 11, 15, 6, 5, tzinfo=UTC),
+            datetime(2026, 11, 16, 6, 20, tzinfo=UTC),
+        ]
+        patterns = analyze_patterns(
+            {"light.family_room": {"turn_off": timestamps}},
+            window_minutes=30,
+        )
+        pattern = patterns["light.family_room"]["turn_off"]
+        assert pattern["hours"] == [22, 22]
+        assert pattern["most_common_window"] == "22:00"
+        assert pattern["time_range"] == "22:00"
 
 
 # =============================================================================

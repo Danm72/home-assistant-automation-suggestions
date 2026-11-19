@@ -312,18 +312,35 @@ def parse_timestamp(ts_str: str | Any | None) -> datetime | None:
         return None
 
 
+def to_local_time(dt: datetime) -> datetime:
+    """Convert a timezone-aware timestamp to Home Assistant's local timezone.
+
+    Logbook timestamps are always UTC, but suggestions are displayed to users
+    as wall-clock times. Naive datetimes are returned unchanged so that the
+    standalone unit tests stay deterministic.
+    """
+    if dt.tzinfo is None:
+        return dt
+    try:
+        from homeassistant.util import dt as dt_util
+    except ImportError:
+        return dt
+    return dt_util.as_local(dt)
+
+
 def get_time_window(dt: datetime, window_minutes: int = DEFAULT_TIME_WINDOW_MINUTES) -> str:
-    """Get a time window string for grouping.
+    """Get a time window string for grouping in Home Assistant's local timezone.
 
     Args:
-        dt: A datetime object.
+        dt: A datetime object (UTC from the logbook).
         window_minutes: Size of time window in minutes.
 
     Returns:
-        A string in format "HH:MM" representing the window start.
+        A string in format "HH:MM" representing the window start, local time.
     """
-    hour = dt.hour
-    minute_bucket = (dt.minute // window_minutes) * window_minutes
+    local_dt = to_local_time(dt)
+    hour = local_dt.hour
+    minute_bucket = (local_dt.minute // window_minutes) * window_minutes
     return f"{hour:02d}:{minute_bucket:02d}"
 
 
@@ -511,7 +528,7 @@ def analyze_patterns(
             for ts in valid_timestamps:
                 window = get_time_window(ts, window_minutes)
                 time_windows[window].append(ts)
-                hours.append(ts.hour)
+                hours.append(to_local_time(ts).hour)
 
             # Find the most common time window
             if time_windows:
